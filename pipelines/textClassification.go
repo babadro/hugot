@@ -72,7 +72,6 @@ func WithMultiLabel() pipelineBackends.PipelineOption[*TextClassificationPipelin
 
 // NewTextClassificationPipeline initializes a new text classification pipeline.
 func NewTextClassificationPipeline(config pipelineBackends.PipelineConfig[*TextClassificationPipeline], s *options.Options, model *pipelineBackends.Model) (*TextClassificationPipeline, error) {
-
 	defaultPipeline, err := pipelineBackends.NewBasePipeline(config, s, model)
 	if err != nil {
 		return nil, err

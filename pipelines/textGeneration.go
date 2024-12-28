@@ -25,63 +25,32 @@ type TextGenerationPipelineConfig struct {
 	Prefix string `json:"prefix"`
 }
 
-// GeneratedOutput holds the generated output text.
-type GeneratedOutput struct {
+// TextGenerationOutput holds the generated output text.
+type TextGenerationOutput struct {
 	GeneratedText string
 }
 
 // GetOutput
-func (t *GeneratedOutput) GetOutput() []any {
+func (t TextGenerationOutput) GetOutput() []any {
 	return []any{t.GeneratedText}
 }
 
 // NewTextGenerationPipeline initializes a new text generation pipeline.
 func NewTextGenerationPipeline(config pipelineBackends.PipelineConfig[*TextGenerationPipeline], s *options.Options, model *pipelineBackends.Model) (*TextGenerationPipeline, error) {
-	basePipeline, err := pipelineBackends.NewBasePipeline(config, s, model)
+	defaultPipeline, err := pipelineBackends.NewBasePipeline(config, s, model)
 	if err != nil {
 		return nil, err
 	}
 
-	pipeline := &TextGenerationPipeline{
-		BasePipeline: basePipeline,
-	}
+	pipeline := &TextGenerationPipeline{BasePipeline: defaultPipeline}
 
 	// Apply functional options
-	for _, opt := range config.Options {
-		opt(pipeline)
+	for _, o := range config.Options {
+		o(pipeline)
 	}
-
-	// Read configuration, such as prefix
-	configPath := util.PathJoinSafe(model.Path, "config.json")
-	configBytes, err := util.ReadFileBytes(configPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var pipelineConfig TextGenerationPipelineConfig
-	if err := jsoniter.Unmarshal(configBytes, &pipelineConfig); err != nil {
-		return nil, err
-	}
-
-	pipeline.Prefix = pipelineConfig.Prefix
 
 	return pipeline, nil
 }
-
-// Preprocess prepares the input text for generation.
-func (p *TextGenerationPipeline) Preprocess(batch *pipelineBackends.PipelineBatch, inputs []string) error {
-	start := time.Now()
-
-	for i, input := range inputs {
-		inputs[i] = p.Prefix + input
-	}
-
-	err := pipelineBackends.TokenizeInputs(batch, p.Model.Tokenizer, inputs)
-	atomic.AddUint64(&p.Model.Tokenizer.TokenizerTimings.NumCalls, 1)
-	atomic.AddUint64(&p.Model.Tokenizer.TokenizerTimings.TotalNS, uint64(time.Since(start)))
-	return err
-}
-
 // GetModel
 func (p *TextGenerationPipeline) GetModel() *pipelineBackends.Model {
 	return p.BasePipeline.Model
@@ -89,13 +58,16 @@ func (p *TextGenerationPipeline) GetModel() *pipelineBackends.Model {
 
 // GetMetadata
 func (p *TextGenerationPipeline) GetMetadata() pipelineBackends.PipelineMetadata {
-
+	return pipelineBackends.PipelineMetadata{
+	OutputsInfo: []pipelineBackends.OutputInfo{
+		{
+			Name: p.Model.OutputsMeta[0].Name,
+			Dimensions: p.Model.OutputsMeta[0].Dimensions,
+		},
+	},
+	}
 }
 
-// Validate
-func (p *TextGenerationPipeline) Validate() error {
-	return nil
-}
 
 // GetStats
 func (p *TextGenerationPipeline) GetStats() []string {
@@ -112,40 +84,48 @@ func (p *TextGenerationPipeline) GetStats() []string {
 	}
 }
 
+// Validate
+func (p *TextGenerationPipeline) Validate() error {
+	// todo
+	return nil
+}
+
+
+
+// Preprocess prepares the input text for generation.
+func (p *TextGenerationPipeline) Preprocess(batch *pipelineBackends.PipelineBatch, inputs []string) error {
+	start := time.Now()
+	pipelineBackends.TokenizeInputs(batch, p.Model.Tokenizer, inputs)
+	atomic.AddUint64(&p.Model.Tokenizer.TokenizerTimings.NumCalls, 1)
+	atomic.AddUint64(&p.Model.Tokenizer.TokenizerTimings.TotalNS, uint64(time.Since(start)))
+	err := pipelineBackends.CreateInputTensors(batch, p.Model.InputsMeta, p.Runtime)
+	return err
+}
+
+
 // Forward performs the model inference step.
 func (p *TextGenerationPipeline) Forward(batch *pipelineBackends.PipelineBatch) error {
 	start := time.Now()
 	err := pipelineBackends.RunSessionOnBatch(batch, p.BasePipeline)
+	if err != nil {
+		return err
+	}
 	atomic.AddUint64(&p.PipelineTimings.NumCalls, 1)
 	atomic.AddUint64(&p.PipelineTimings.TotalNS, uint64(time.Since(start)))
-	return err
+	return nil
 }
 
 // Postprocess extracts generated text from the model's output.
-func (p *TextGenerationPipeline) Postprocess(batch *pipelineBackends.PipelineBatch) ([]GeneratedOutput, error) {
-	output := batch.OutputValues[0]
-	if len(output.Result2D) == 0 {
-		return nil, errors.New("output is not 2D, expected batch size x sequence length")
-	}
+func (p *TextGenerationPipeline) Postprocess(batch *pipelineBackends.PipelineBatch) ([]TextGenerationOutput, error) {
 
-	results := make([]GeneratedOutput, len(batch.Input))
-	for i, tokens := range output.Result2D {
-		text := p.Model.Tokenizer.Decode(tokens)
-		results[i] = GeneratedOutput{
-			GeneratedText: text,
-		}
-	}
-
-	return results, nil
 }
 
-func (p *TextGenerationPipeline) Run(inputs []string) (GeneratedOutput, error) {
-
+func (p *TextGenerationPipeline) Run(inputs []string) (pipelineBackends.PipelineBatchOutput, error) {
 	return p.RunPipeline(inputs)
 }
 
 // RunPipeline runs the text generation pipeline on a batch of inputs.
-func (p *TextGenerationPipeline) RunPipeline(inputs []string) (GeneratedOutput, error) {
+func (p *TextGenerationPipeline) RunPipeline(inputs []string) (TextGenerationOutput, error) {
 	batch := pipelineBackends.NewBatch()
 	defer batch.Destroy()
 
