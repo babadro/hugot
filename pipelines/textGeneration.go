@@ -9,9 +9,7 @@ import (
 
 	"github.com/knights-analytics/hugot/options"
 	"github.com/knights-analytics/hugot/pipelineBackends"
-	"github.com/knights-analytics/hugot/util"
 
-	jsoniter "github.com/json-iterator/go"
 )
 
 // TextGenerationPipeline represents a text generation pipeline.
@@ -116,8 +114,8 @@ func (p *TextGenerationPipeline) Forward(batch *pipelineBackends.PipelineBatch) 
 }
 
 // Postprocess extracts generated text from the model's output.
-func (p *TextGenerationPipeline) Postprocess(batch *pipelineBackends.PipelineBatch) ([]TextGenerationOutput, error) {
-
+func (p *TextGenerationPipeline) Postprocess(batch *pipelineBackends.PipelineBatch) (*TextGenerationOutput, error) {
+	output := batch.OutputValues[0]
 }
 
 func (p *TextGenerationPipeline) Run(inputs []string) (pipelineBackends.PipelineBatchOutput, error) {
@@ -125,17 +123,24 @@ func (p *TextGenerationPipeline) Run(inputs []string) (pipelineBackends.Pipeline
 }
 
 // RunPipeline runs the text generation pipeline on a batch of inputs.
-func (p *TextGenerationPipeline) RunPipeline(inputs []string) (TextGenerationOutput, error) {
+func (p *TextGenerationPipeline) RunPipeline(inputs []string) (*TextGenerationOutput, error) {
+	var runErrors []error
 	batch := pipelineBackends.NewBatch()
-	defer batch.Destroy()
+	defer func(*pipelineBackends.PipelineBatch) {
+		runErrors = append(runErrors, batch.Destroy())
+	}(batch)
 
-	if err := p.Preprocess(batch, inputs); err != nil {
-		return nil, err
+	runErrors = append(runErrors, p.Preprocess(batch, inputs))
+	if e := errors.Join(runErrors...); e != nil {
+		return nil, e
 	}
 
-	if err := p.Forward(batch); err != nil {
-		return nil, err
+	runErrors = append(runErrors, p.Forward(batch))
+	if e := errors.Join(runErrors...); e != nil {
+		return nil, e
 	}
 
-	return p.Postprocess(batch)
+	result, postErr := p.Postprocess(batch)
+	runErrors = append(runErrors, postErr)
+	return result, errors.Join(runErrors...)
 }
